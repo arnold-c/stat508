@@ -1,0 +1,462 @@
+---
+title: "Data Analysis Assignment W07"
+author: "Callum Arnold"
+output:
+    html_notebook:
+        code_folding: hide
+        toc: yes
+        toc_float: yes
+---
+
+# Introduction
+
+This week’s assignment was to evaluate the performance of different classification methods to explore 21 years worth of stock market data and predict whether the a market prices would rise or fall from day-to-day. To compare the methods’ predictive power, the data was split into training and test data sets, and confusion matrices were calculated to evaluate performance. The methods evaluated were: logistic regression (LR), linear discriminant analysis (LDA), quadratic discriminant analysis (QDA), and k-nearest neighbours (KNN). Both logistic regression and LDA returned identical predictions on the test data, outperforming the other methods, even after performing cross-validation to optimise k for KNN. None of the methods proved to be particularly accurate, with LR and LDA performing the best due to their high sensitivities, which proved to be important given the high percentage of positive weekly returns favouring models with a high sensitivity.
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE, fig.width = 14)
+```
+
+```{r}
+library(ISLR)
+library(tidyverse)
+library(caret)
+library(MASS)
+library(class)
+library(kableExtra)
+library(hrbrthemes)
+library(janitor)
+
+RNGkind(sample.kind = "Rounding")
+set.seed(1)
+
+theme_set(theme_ipsum())
+```
+
+# Data
+
+The `Smarket` data from ISLR is a dataset that contains weekly stock market returns over a period of 21 years between 1990 and 2010. It contains the following variables.
+
+```{r}
+data("Weekly")
+glimpse(Weekly)
+```
+
+```{r}
+tibble(
+  Variable = names(Weekly),
+  Description = c(
+    "The year that the observation was recorded",
+    "Percentage return for previous week",
+    "Percentage return for 2 weeks previous",
+    "Percentage return for 3 weeks previous",
+    "Percentage return for 4 weeks previous",
+    "Percentage return for 5 weeks previous",
+    "Volume of shares traded (average number of daily shares traded in billions)",
+    "Percentage return for this week",
+    "A factor with levels Down and Up indicating whether the market had a positive or negative return on a given week"
+  )
+) %>%
+    kable() %>%
+    kable_styling(
+        bootstrap_options = c("striped", "hover", "condensed", "responsive"), 
+        full_width = F)
+```
+
+
+## Data Summary
+
+```{r}
+summary(Weekly)
+
+pairs(Weekly[, -9])
+```
+
+Examining the correlations, only volume and the year have significant correlations, indicating no particular patterns that need to be addressed in the data. For a further exploration of this relationship, a line plot was created, demonstrating a steady increase since 1990 to a large peak in trading volume around 2008-2009, before a slight decline.
+
+```{r}
+library(corrplot)
+corr_matrix <- as.matrix(cor(Weekly[, -9]))
+corrplot(corr_matrix, order="hclust",type="upper") 
+```
+
+```{r}
+corr_matrix%>%
+    kable() %>%
+    kable_styling(
+        bootstrap_options = c("striped", "hover", "condensed", "responsive"), 
+        full_width = F)
+```
+
+
+```{r}
+Weekly$Week <- 1:nrow(Weekly)
+
+year_breaks <- Weekly %>%
+  group_by(Year) %>%
+  summarize(Week = min(Week))
+```
+
+
+```{r}
+ggplot(Weekly, aes(x = Week, y = Volume)) +
+  geom_line() +
+  geom_smooth() +
+  scale_x_continuous(
+    breaks = year_breaks$Week,
+    labels = year_breaks$Year
+  ) +
+    scale_color_ipsum() + 
+  labs(
+    title = "Average Daily Shares Traded (Volume) over Time",
+    x = "Year"
+  )
+```
+
+As would be expected from the line plot of volume over time, the majority of the years see a positive return for > 50% of the weeks in a year (`Direction` = "Up"). Over the course of the 21 years, 55.6% of all weeks see a positive return. However, there are varying amounts of variance seen from year-to-year in the weekly percentage return (`Today`), with a roughly sinusoidal pattern and peaks in variance returning every 10 years.
+
+```{r}
+Weekly %>%
+    tabyl(Direction, Year) %>%
+    adorn_percentages(denominator = "col") %>%
+    adorn_pct_formatting(digits = 1, affix_sign = TRUE) %>%
+    kable() %>%
+    kable_styling(
+        bootstrap_options = c("striped", "hover", "condensed", "responsive"), 
+        full_width = F)
+
+prop.table(table(Direction = Weekly$Direction)) %>%
+    kable() %>%
+    kable_styling(
+        bootstrap_options = c("striped", "hover", "condensed", "responsive"), 
+        full_width = F)
+```
+
+
+```{r}
+ggplot(Weekly, aes(x = Year, y = Today)) +
+  geom_point() +
+  labs(
+    title = "Weekly Percentage Return over Time",
+    x = "Time",
+    y = "Percentage Return"
+  )
+```
+
+
+# Logistic Regression
+
+Performing a logistic regression on the full dataset, including all variables, `Lag2` appears to be the only statistically significant predictor of `Direction`, with a p = 0.03.
+
+```{r}
+lr_full <- glm(Direction ~ Lag1 + Lag2 + Lag3 + Lag4 + Lag5 + Volume,
+  data = Weekly,
+  family = "binomial"
+)
+
+summary(lr_full)
+```
+
+## Confusion Matrix
+
+Computing the confusion matrix for the logistic regression of the full dataset, it can be seen that it has an accuracy of 56.1%, a sensitivity of 92.1% (correctly predicts `Direction` "Up"), and a specificity of only 11.1%. These numbers highlight that the logistic regression is predicting that the stock market returns will increase virtually all the time, very rarely predicting the "Down" `Direction`, something that would be desirable to overcome in different models. 
+
+```{r}
+predicted <- factor(
+  ifelse(
+    predict(lr_full, type = "response") < 0.5,
+    "Down",
+    "Up"
+  )
+)
+```
+
+
+```{r}
+confusionMatrix(predicted, Weekly$Direction, positive = "Up")
+
+prop.table(table(predicted))
+```
+
+# Test and Train Data
+
+```{r}
+train <- filter(Weekly, Year <= 2008)
+test <- filter(Weekly, Year > 2008)
+```
+
+## Logistic Regression
+
+Splitting the data into testing and training sets (before and after 2008), and using `Lag2` as the only predictor (the only predictor with significance), the logistic regression model demonstrates similar performance, over estimating the positive returns of the market. The specificity and accuracy are both improved in this more parsimonious model, however, it performs worse when altering the test-train split to the year 2007, so is likely not a meaningful improvement and an artifact of the small test size. The p-value associated with the `Acc > NIR` is 0.24. This indicates the probability of the accuracy exceeding that of randomly allocating classes (`No Information Rate`). With a p = 0.24, the logistic regression model is not a significant improvement over random chance.
+
+```{r}
+lr_split<- glm(Direction ~ Lag2,
+  data = train,
+  family = "binomial"
+)
+
+predicted_lr <- factor(
+  ifelse(
+    predict(lr_split, newdata = test, type = "response") < 0.5,
+    "Down",
+    "Up"
+  )
+)
+```
+
+
+```{r}
+confusionMatrix(predicted_lr, test$Direction, positive = "Up")
+```
+
+## LDA
+
+LDA performs identically to the logistic regression on the test data set.
+
+```{r}
+lda_split <- lda(Direction ~ Lag2, data = train)
+
+predicted_lda <- predict(lda_split, newdata = test)
+```
+
+
+```{r}
+confusionMatrix(
+  data = predicted_lda$class,
+  reference = test$Direction,
+  positive = "Up"
+)
+```
+
+
+```{r}
+plot(predicted_lda$posterior)
+
+# Range of posterio values for Down
+range(predicted_lda$posterior[, 1])
+# Range of posterio values for UP
+range(predicted_lda$posterior[, 2])
+```
+
+## QDA
+
+QDA performs differently to LR and LDA, however, it is not an improvement, increasing the sensitivity to 100% and the specificity to 0% i.e. predicting every return to be positive. This is obviously not a useful prediction model to create.
+
+```{r}
+qda_dir <- qda(Direction ~ Lag2, data = train)
+
+
+predicted_qda <- predict(qda_dir, newdata = test)
+```
+
+
+```{r}
+confusionMatrix(
+  data = predicted_qda$class,
+  reference = test$Direction,
+  positive = "Up"
+)
+```
+
+## KNN
+
+K-Nearest Neighbours also did not perform any better than LR and LDA on the test data when `Lag2` is the only predictor, using accuracy and NIR as the validation metrics. Whilst specificity was greatly improved, particularly when `k = 1`, sensitivity was much lower, resulting in lower accuracy than LDA and LR, which is as expected when > 50% of years were predominantly in the "Up" `Direction` (meaning it was less accurate predicting the predominant `Direction`). `k = 3` had a slightly higher accuracy than `k = 1`.
+
+```{r}
+tibble(
+  Statistic = c(
+      "Accuracy",
+      "95% CI" ,
+      "No Information Rate",
+      "P-Value [Acc > NIR]",
+      "Sensitivity",
+      "Specificity"
+  ),
+  `k = 1` = c(
+    "0.5",
+    "0.4003 - 0.5997",
+    "0.5865",
+    "0.9700",
+    "0.5082",
+    "0.4884"
+  ),
+  `k = 3` = c(
+    "0.5577",
+    "0.457 - 0.655",
+    "0.5865",
+    "0.7579",
+    "0.6885",
+    "0.3721"
+  ) 
+) %>%
+    kable() %>%
+    kable_styling(
+        bootstrap_options = c("striped", "hover", "condensed", "responsive"), 
+        full_width = F)
+```
+
+
+### k = 1
+```{r}
+set.seed(1)
+```
+
+
+```{r}
+predicted_knn_1 <- knn(
+  train = data.frame(Lag2 = train$Lag2),
+  test = data.frame(Lag2 = test$Lag2),
+  cl = train$Direction,
+  k = 1
+)
+```
+
+
+```{r}
+confusionMatrix(
+  data = predicted_knn_1,
+  reference = test$Direction,
+  positive = "Up"
+)
+```
+
+
+### k = 3
+
+```{r}
+predicted_knn_3 <- knn(
+  train = data.frame(Lag2 = train$Lag2),
+  test = data.frame(Lag2 = test$Lag2),
+  cl = train$Direction,
+  k = 3
+)
+```
+
+
+```{r}
+confusionMatrix(
+  data = predicted_knn_3,
+  reference = test$Direction,
+  positive = "Up"
+)
+```
+
+# Best Performing Classifier
+
+When experimenting with the number of k-nearest neighbours, for the seed selected (123), `k = 41` proved to return the lowest test error and therefore the highest accuracy. However, on this dataset, logistic regression and LDA still outperform KNN and QDA.
+
+```{r}
+tibble(
+  Statistic = c(
+      "Accuracy",
+      "95% CI" ,
+      "No Information Rate",
+      "P-Value [Acc > NIR]",
+      "Sensitivity",
+      "Specificity"
+  ),
+  `Logistic Regression` = c(
+    "0.625",
+    "0.5247 - 0.718",
+    "0.5865",
+    "0.2439",
+    "0.9180",
+    "0.2093"
+  ),
+  LDA = c(
+    "0.625",
+    "0.5247 - 0.718",
+    "0.5865",
+    "0.2439",
+    "0.9180",
+    "0.2093"
+  ),
+  QDA = c(
+    "0.5865",
+    "0.4858 - 0.6823",
+    "0.5865",
+    "0.5419",
+    "1.0000",
+    "0.0000"
+  ),
+  `k = 1` = c(
+    "0.5",
+    "0.4003 - 0.5997",
+    "0.5865",
+    "0.9700",
+    "0.5082",
+    "0.4884"
+  ),
+  `k = 3` = c(
+    "0.5577",
+    "0.457 - 0.655",
+    "0.5865",
+    "0.7579",
+    "0.6885",
+    "0.3721"
+  ),
+  `k = 41` = c(
+    "0.5673",
+    "0.4665- 0.6641",
+    "0.5865",
+    "0.6921",
+    "0.6066",
+    "0.5116"
+  )
+) %>%
+    kable() %>%
+    kable_styling(
+        bootstrap_options = c("striped", "hover", "condensed", "responsive"), 
+        full_width = F) %>%
+    column_spec(column = 2:3, bold = TRUE)
+```
+
+```{r}
+M <- 100
+errors <- c()
+
+set.seed(123)
+for (i in 1:M){
+  knn_pred <- knn(
+      train = data.frame(Lag2 = train$Lag2),
+      test = data.frame(Lag2 = test$Lag2),
+      cl = train$Direction,
+      k = i)
+  
+  table(knn_pred, test$Direction)
+  errors <- c(1 - mean(knn_pred == test$Direction), errors)
+}
+
+knn_errors <- as.data.frame(cbind(seq(1, M),errors))
+```
+
+
+```{r}
+ggplot(knn_errors, aes(x = V1, y = errors)) + 
+    geom_line() +
+    labs(
+        title = "Test error vs k for predicting stock market direction",
+         x = "k",
+        y = "Test error"
+        )
+    
+which.min(knn_errors$errors)
+```
+
+
+```{r}
+predicted_knn_41 <- knn(
+  train = data.frame(Lag2 = train$Lag2),
+  test = data.frame(Lag2 = test$Lag2),
+  cl = train$Direction,
+  k = 41
+)
+```
+
+
+```{r}
+confusionMatrix(
+  data = predicted_knn_41,
+  reference = test$Direction,
+  positive = "Up"
+)
+```
