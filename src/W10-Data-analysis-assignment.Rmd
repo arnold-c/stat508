@@ -1,0 +1,248 @@
+---
+title: "Data Analysis Assignment W10"
+author: "Callum Arnold"
+output:
+    html_notebook:
+        code_folding: hide
+        toc: yes
+        toc_float: yes
+---
+
+# Introduction
+
+
+This week’s assignment was to identify whether a UK-based online retail store's consumers can be classified in a meaningful manner using information around their interaction with the company and the order, and if the consumer's country elicits further information that may be helpful for marketing purposes. After standardizing the values, k-means and hierarchical clustering were used to identify clusters in the consumer interactions. 3 clusters were identified to perform the best in k-means when examining plots of the clusters and statistics such as within cluster sum of squares.
+
+# Data 
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE, fig.width = 14)
+```
+
+```{r}
+library(ISLR)
+library(tidyverse)
+library(readxl) 
+library(here)
+library(kableExtra)
+library(hrbrthemes)
+library(janitor)
+library(rsample)
+library(factoextra)
+
+RNGkind(sample.kind = "Rounding")
+set.seed(1)
+
+theme_set(theme_ipsum())
+```
+
+The `Online Retail` data  is a dataset that contains over 50000 purchase records on an online retailer, and 9 variables that are possible classifiers, described below, between 1-Dec-2010 and 30-Nov-2011. Records with duplicate consumer IDs in different countries have been removed. Examining the remaining records, the vast majority of interactions were by consumers in the UK, far outnumbering the 2nd place country by almost 4000 to 93 (Germany). This indicates that there would be too few observations to gain significant insight at a country level - the noise would likely overpower any real differences.
+
+```{r}
+eretail <- read_excel(here("data", "Online-Retail.xlsx"))
+dim(eretail)
+names(eretail)
+
+eretail <- eretail[eretail$Country != "Unspecified", ] # remove 'unspecified' country
+eretail <- eretail[eretail$Quantity > 0, ] # remove returns/cancellations
+
+IDtab <- table(eretail$Country, eretail$CustomerID) # crosstab country by customer ID
+IDtab <- apply(IDtab > 0, 2, sum) # is any customer ID duplicated across countries?
+duplicateIDs <- names(IDtab[IDtab > 1]) # duplicate IDs to clean up
+eretail <- eretail[!is.element(eretail$CustomerID, duplicateIDs), ]
+rm(IDtab)
+
+eretail$InvoiceMth <- substr(eretail$InvoiceDate, 1, 7) # extract month of invoice
+eretail <- eretail[as.vector(eretail$InvoiceMth) != "2011-12", ] # remove December 2011 as it only covers first week
+
+eretail$Amount <- eretail$Quantity * eretail$UnitPrice # compute amount per invoice item
+
+eaggr <- aggregate(Amount ~ Country + CustomerID, data = eretail, sum) # compute aggregate amount spent per customer
+row.names(eaggr) <- eaggr$CustomerID
+eaggr <- eaggr[, -2]
+eaggr <- cbind(eaggr, aggregate(InvoiceMth ~ CustomerID, data = eretail, min)[, -1]) # 1st month of customer interaction
+names(eaggr)[3] <- "FirstMth"
+eaggr <- cbind(eaggr, aggregate(InvoiceMth ~ CustomerID, data = eretail, max)[, -1]) # last month of cust. interaction
+names(eaggr)[4] <- "LastMth"
+
+# relabel months and compute duration of customer interaction
+eaggr$FirstMth <- as.factor(eaggr$FirstMth)
+eaggr$LastMth <- as.factor(eaggr$LastMth)
+levels(eaggr$FirstMth) <- 1:12
+levels(eaggr$LastMth) <- 1:12
+eaggr$Months <- as.numeric(eaggr$LastMth) - as.numeric(eaggr$FirstMth) + 1
+
+eaggr <- cbind(eaggr, apply(table(eretail$CustomerID, eretail$InvoiceMth), 1, sum))
+names(eaggr)[6] <- "Purchases"
+
+# Some useful statistics (which you may or may not decide to use)
+eaggr$Amount.per.Purchase <- eaggr$Amount / eaggr$Purchases
+eaggr$Purchases.per.Month <- eaggr$Purchases / eaggr$Months
+eaggr$Amount.per.Month <- eaggr$Amount / eaggr$Months
+
+eaggr[1:30, ]
+```
+
+```{r}
+tibble(
+  Variable = names(eaggr),
+  Description = c(
+    "Country of consumer",
+    "Total amount spent by the consumer",
+    "First month of purchase by consumer",
+    "Last month of purchase by consumer",
+    "Number of months of interaction by consumer",
+    "Amount per purchase",
+    "Number of purchases per month",
+    "Amount spent per month"
+  )
+) %>%
+    kable() %>%
+    kable_styling(
+        bootstrap_options = c("striped", "hover", "condensed", "responsive"), 
+        full_width = F)
+```
+
+```{r}
+summary(eaggr)
+```
+
+```{r}
+sum(is.na(eaggr))
+```
+
+```{r}
+eaggr %>%
+    tabyl(Country) %>%
+    top_n(5) %>%
+    sort(desc(n)) %>%
+    ggplot(aes(x = Country, y = n)) + 
+    geom_bar(stat = "identity") +
+    geom_text(aes(label = n))
+```
+
+```{r}
+eaggr_num <- eaggr[, -1] %>%
+    sapply(as.numeric)
+
+eaggr_scale <- scale(eaggr_num)
+```
+
+# K-Means 
+
+An important part of clustering is determining the number of clusters to use. The following charts examine this issue in a number of manners. The first plot calculates the total within sum of squares for various k-clusters and plots them. As can be observed there is no obvious elbow, but the most substantial improvement is in the first 6 clusters. This is echoed in the 2nd plot which examines the issue in a similar manner. The third plot uses the silhouette method to determine 6 clusters are preferable, and the 4th plot uses bootstrapping to identify 3 clusters as preferable. Examining the clusters visually (plots 4-6) shows that the minimal amount of overlap between clusters is 3
+
+```{r}
+rng <- 2:20 # K from 2 to 20
+tries <- 100 # Run the K Means algorithm 100 times
+avg.totw.ss <- integer(length(rng)) # Set up an empty vector to hold all of points
+
+for (v in rng) { # For each value of the range variable
+  v.totw.ss <- integer(tries) # Set up an empty vector to hold the 100 tries
+  for (i in 1:tries) {
+    km.temp <- kmeans(eaggr_scale, centers = v) # Run kmeans
+    v.totw.ss[i] <- km.temp$tot.withinss # Store the total withinss
+  }
+  avg.totw.ss[v - 1] <- mean(v.totw.ss) # Average the 100 total withinss
+}
+
+plot(rng, avg.totw.ss,
+  type = "b", main = "Total Within SS by Various K",
+  ylab = "Average Total Within Sum of Squares",
+  xlab = "Value of K"
+)
+```
+Plot 1
+
+```{r}
+fviz_nbclust(eaggr_scale, kmeans, method = "wss") + 
+    geom_vline(xintercept = 6, linetype = 2)
+```
+Plot 2
+
+```{r}
+fviz_nbclust(eaggr_scale, kmeans, method = "silhouette") 
+```
+Plot 3
+
+```{r}
+fviz_nbclust(eaggr_scale, kmeans, method = "gap_stat", nboot = 500) 
+```
+
+Plot 4
+
+```{r}
+k6 <- kmeans(eaggr_scale, centers = 6, nstart = 50)
+
+fviz_cluster(k6, geom = "point", data = eaggr_scale, pointsize = 0.2) + 
+    ggtitle("k = 6")
+```
+Plot 5
+
+```{r}
+k4 <- kmeans(eaggr_scale, centers = 4, nstart = 50)
+
+fviz_cluster(k4, geom = "point", data = eaggr_scale, pointsize = 0.2) + 
+    ggtitle("k = 4")
+```
+Plot 6
+
+```{r}
+k3 <- kmeans(eaggr_scale, centers = 3, nstart = 50)
+
+fviz_cluster(k3, geom = "point", data = eaggr_scale, pointsize = 0.2) + 
+    ggtitle("k = 3")
+```
+
+Plot 7
+
+# Hierarchical Clustering
+
+```{r}
+data.dist <- dist(eaggr_scale)
+eaggr.labs <- names(eaggr[, -1])
+```
+
+```{r}
+plot(hclust(data.dist), 
+     main = "Complete Linkage", 
+     xlab = "", 
+     ylab = "", 
+     sub = "")
+```
+
+```{r}
+plot(hclust(data.dist, method = "average"), 
+     main = "Average Linkage", 
+     xlab = "", 
+     ylab = "", 
+     sub = "")
+```
+
+
+```{r}
+plot(hclust(data.dist, method = "single"), 
+     main = "Single Linkage", 
+     xlab = "", 
+     ylab = "", 
+     sub = "")
+```
+
+```{r}
+hc.out <- hclust(data.dist)
+hc.clusters <- cutree(hc.out, 3)
+table(hc.clusters)
+```
+
+
+# Conclusions
+
+```{r}
+km.out <- kmeans(eaggr_scale, 3, nstart = 20)
+km.clusters <- km.out$cluster
+hc.out <- hclust(data.dist)
+hc.clusters <- cutree(hc.out, 3)
+table(km.clusters, hc.clusters)
+```
+
+Examining the difference between k-means and hierarchical clustering in the above table, it can be seen that the majority of observations fall in the 2nd cluster for hierarchical clustering, and there is a relatively even split between the 1st and 3rd in k-means clustering.

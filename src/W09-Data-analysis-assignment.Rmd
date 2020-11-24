@@ -1,0 +1,369 @@
+---
+title: "Data Analysis Assignment W09"
+author: "Callum Arnold"
+output:
+    html_notebook:
+        code_folding: hide
+        toc: yes
+        toc_float: yes
+---
+
+# Introduction
+
+This week’s assignment was to evaluate the performance of different kernel methods of support vector machnines, and the underlying method of support vectior classifiers, to explore which variables act as predictors of which brand of orange juice was purchased in the `OJ` dataset. To compare the methods’ predictive power, the data was split into training and test data sets, a range of cost, gamma, and degree parameters were evaluated using test error rates. The methods evaluated were: support vector classifier (SVC), and support vector machines using either a polynomial kernel (SVM-P) (degree = 2) or a radial kernel (SVM-R) (default gamma = `r round(1 / ncol(OJ), digits = 2)` [`1 / ncol(OJ)`]). SVC performed the most consistently on the training and the test data set, with `cost` having little effect on the accuracy, whereas both SVM methods were heavily affected by the `cost`. After optimization of `cost` using 10-fold cross-validation, SVM-R performed the best, with an accuracy of 0.819 on the test data, and the lower variance between training and test performance relative to SVM-P.
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE, fig.width = 14)
+```
+
+```{r}
+library(ISLR)
+library(tidyverse)
+library(caret)
+library(e1071)
+library(ROCR)
+library(kableExtra)
+library(hrbrthemes)
+library(janitor)
+library(rsample)
+
+RNGkind(sample.kind = "Rounding")
+set.seed(1)
+
+theme_set(theme_ipsum())
+```
+
+# Data
+
+```{r}
+data("OJ")
+glimpse(OJ)
+```
+
+The `OJ` data from ISLR is a dataset that contains over 1000 purchase records of either "Citrus Hill" or "Minute Maid" brands of orange juice, and 17 variables that are possible predictors of the purchase brand. The predictor variable descriptions are listed below.
+
+```{r}
+tibble(
+  Variable = names(OJ),
+  Description = c(
+    "A factor with levels CH and MM indicating whether the customer purchased Citrus Hill or Minute Maid Orange Juice",
+    "Week of purchase",
+    "Store ID", 
+    "Price charged for CH",
+    "Price charged for MM",
+    "Discount offered for CH",
+    "Discount offered for MM",
+    "Indicator of special on CH",
+    "Indicator of special on MM",
+    "Customer brand loyalty for CH",
+    "Sale price for MM",
+    "Sale price for CH",
+    "Sale price of MM less sale price of CH",
+    "A factor with levels No and Yes indicating whether the sale is at Store 7",
+    "Percentage discount for MM",
+    "Percentage discount for CH",
+    "List price of MM less list price of CH",
+    "Which of 5 possible stores the sale occured at"
+  )
+) %>%
+    kable() %>%
+    kable_styling(
+        bootstrap_options = c("striped", "hover", "condensed", "responsive"), 
+        full_width = F)
+```
+
+## Data Pre-Processing
+
+```{r}
+set.seed(1)
+
+oj_split <- initial_split(OJ, prop = 800 / nrow(OJ))
+train_data <- training(oj_split)
+test_dat <- testing(oj_split)
+```
+
+
+# Support Vector Classifier
+
+SVC performed well at correctly classifying the purchased brand on the basis of the predictor variables and was relatively unaffected by the `cost`: the accuracy of the initial and optimized SVC on the training data was similar (0.834 vs 0.0.850) and the testing data was the same (0.815). 435 support vectors were used in the original SVC, and when optimized (`cost` = 1), 327 support vectors were used. Upon optimization there was an 81.5% accuracy rate on the test data. The p-value associated with the `Acc > NIR` is $ <2e-16 $. This indicates the probability of the accuracy exceeding that of randomly allocating classes (`No Information Rate`). With a $ p < 2e-16 $, the optimized SVC is a significant improvement over random chance. With a sensitivity of 84.5% and specificity of 77.4% (on the test data, with respect to `CH` as the positive result), the SVM was able to more accurately identify `CH` purchases than `MM` purchases.
+
+```{r}
+svc_fit <- svm(
+    Purchase ~ ., 
+    data = train_data, 
+    kernel = "linear",
+    cost = 0.01)
+```
+
+```{r}
+summary(svc_fit)
+```
+
+```{r}
+svc_ypred_train <- predict(svc_fit, newdata = train_data)
+confusionMatrix(svc_ypred_train, reference = train_data$Purchase)
+```
+
+```{r}
+svc_ypred_test <- predict(svc_fit, newdata = test_dat)
+confusionMatrix(svc_ypred_test, reference = test_dat$Purchase)
+```
+
+## Tuning optimal cost
+
+```{r}
+svc_tuned <- tune(
+  svm,
+  Purchase ~ .,
+  data = train_data,
+  kernel = "linear",
+  ranges = list(cost = c(0.01, 0.1, 1, 3, 6, 10))
+)
+
+summary(svc_tuned)
+
+svc_bestmod <- svc_tuned$best.model
+
+summary(svc_bestmod)
+```
+
+```{r}
+svc_tuned$performances %>%
+  ggplot(aes(cost, error)) +
+  geom_point() +
+  geom_line()
+```
+
+```{r}
+svc_best_ypred_train <- predict(svc_bestmod, newdata = train_data)
+confusionMatrix(svc_best_ypred_train, reference = train_data$Purchase)
+```
+
+```{r}
+svc_best_ypred_test <- predict(svc_bestmod, newdata = test_dat)
+confusionMatrix(svc_best_ypred_test, reference = test_dat$Purchase)
+```
+
+# Support Vector Machine
+## Radial Kernel
+
+SVM-R performed well at correctly classifying the purchased brand on the basis of the predictor variables once optimized, but was strongly affected by the `cost`: the accuracy of the initial and optimized SVM-R on the training data was very dissimilar (0.623 vs 0.853) as well as the testing data (0.574 vs 0.819). The smaller difference in train vs test performance in the optimized SVM-R illustrates a lower variance, in addition to a reduced bias. 607 support vectors were used in the original SVM-R, with such wide margins that all predictions were `CH` brand, and when optimized (`cost` = 1), 364 support vectors were used. Upon optimization there was an 81.9% accuracy rate on the test data. The p-value associated with the `Acc > NIR` is $ <2e-16 $. This indicates the probability of the accuracy exceeding that of randomly allocating classes (`No Information Rate`). With a $ p < 2e-16 $, the optimized SVC is a significant improvement over random chance. With a sensitivity of 89.0% and specificity of 72.2% (on the test data, with respect to `CH` as the positive result), the SVM-R was able to more accurately identify `CH` purchases than `MM` purchases.
+
+```{r}
+svm_rad_fit <- svm(
+    Purchase ~ ., 
+    data = train_data, 
+    kernel = "radial",
+    cost = 0.01)
+```
+
+```{r}
+summary(svm_rad_fit)
+```
+
+```{r}
+svm_rad_ypred_train <- predict(svm_rad_fit, newdata = train_data)
+confusionMatrix(svm_rad_ypred_train, reference = train_data$Purchase)
+```
+
+```{r}
+svm_rad_ypred_test <- predict(svm_rad_fit, newdata = test_dat)
+confusionMatrix(svm_rad_ypred_test, reference = test_dat$Purchase)
+```
+
+### Tuning optimal cost
+
+```{r}
+svm_rad_tuned <- tune(
+  svm,
+  Purchase ~ .,
+  data = train_data,
+  kernel = "radial",
+  ranges = list(cost = c(0.01, 0.1, 1, 3, 6, 10))
+)
+
+summary(svm_rad_tuned)
+
+svm_rad_bestmod <- svm_rad_tuned$best.model
+
+summary(svm_rad_bestmod)
+```
+
+```{r}
+svm_rad_tuned$performances %>%
+  ggplot(aes(cost, error)) +
+  geom_point() +
+  geom_line()
+```
+
+```{r}
+svm_rad_best_ypred_train <- predict(svm_rad_bestmod, newdata = train_data)
+confusionMatrix(svm_rad_best_ypred_train, reference = train_data$Purchase)
+```
+
+```{r}
+svm_rad_best_ypred_test <- predict(svm_rad_bestmod, newdata = test_dat)
+confusionMatrix(svm_rad_best_ypred_test, reference = test_dat$Purchase)
+```
+## Polynomial Kernel
+
+Similar to SVM-R, SVM-P performed well at correctly classifying the purchased brand on the basis of the predictor variables once optimized, but was strongly affected by the `cost`: the accuracy of the initial and optimized SVM-P on the training data was very dissimilar (0.643 vs 0.869) as well as the testing data (0.596 vs 0.793). The smaller difference in train vs test performance in the optimized SVM-P illustrates a lower variance, in addition to a reduced bias. 611 support vectors were used in the original SVM-P, with such wide margins that nearly all predictions were `CH` brand, and when optimized (`cost` = 10), 343 support vectors were used. Upon optimization there was an 79.3% accuracy rate on the test data. The p-value associated with the `Acc > NIR` is $ 3.05e-14 $. This indicates the probability of the accuracy exceeding that of randomly allocating classes (`No Information Rate`). With a $ p = 3.05e-14 $, the optimized SVM-P is a significant improvement over random chance. With a sensitivity of 88.4% and specificity of 67.0% (on the test data, with respect to `CH` as the positive result), the SVM-P was able to more accurately identify `CH` purchases than `MM` purchases.
+
+```{r}
+svm_poly_fit <- svm(
+    Purchase ~ ., 
+    data = train_data, 
+    kernel = "polynomial",
+    cost = 0.01,
+    degree = 2)
+```
+
+```{r}
+summary(svm_poly_fit)
+```
+
+```{r}
+svm_poly_ypred_train <- predict(svm_poly_fit, newdata = train_data)
+confusionMatrix(svm_poly_ypred_train, reference = train_data$Purchase)
+```
+
+```{r}
+svm_poly_ypred_test <- predict(svm_poly_fit, newdata = test_dat)
+confusionMatrix(svm_poly_ypred_test, reference = test_dat$Purchase)
+```
+
+### Tuning optimal cost
+
+```{r}
+svm_poly_tuned <- tune(
+  svm,
+  Purchase ~ .,
+  data = train_data,
+  kernel = "polynomial",
+  ranges = list(cost = c(0.01, 0.1, 1, 3, 6, 10)),
+  degree = 2
+)
+
+summary(svm_poly_tuned)
+
+svm_poly_bestmod <- svm_poly_tuned$best.model
+
+summary(svm_poly_bestmod)
+```
+
+```{r}
+svm_poly_tuned$performances %>%
+  ggplot(aes(cost, error)) +
+  geom_point() +
+  geom_line()
+```
+
+```{r}
+svm_poly_best_ypred_train <- predict(svm_poly_bestmod, newdata = train_data)
+confusionMatrix(svm_poly_best_ypred_train, reference = train_data$Purchase)
+```
+
+```{r}
+svm_poly_best_ypred_test <- predict(svm_poly_bestmod, newdata = test_dat)
+confusionMatrix(svm_poly_best_ypred_test, reference = test_dat$Purchase)
+```
+
+# Conclusion
+
+Based on the accuracy observed in the training and the test data, the simple SVC performed the best without optimization. However, there was little improvement upon optimization, with SVM-R outperforming it with training and test accuracy, although it exhibited slightly higher variance than SVC. SVM-P showed similar performance to SVM-R, improving greatly with optimization of `cost`, although it was not the most performant model. On this dataset, SVM-R would be selected as the final model due to its improved accuracy on both the training and test data.
+
+
+```{r}
+tibble(
+  Statistic = c(
+    "SVC Train",
+    "SVC Test",
+    "SVC Train",
+    "SVC Test",
+    "SVM Radial Train",
+    "SVM Radial Test",
+    "SVM Radial Train",
+    "SVM Radial Test",
+    "SVM Polynomial Train",
+    "SVM Polynomial Test",
+    "SVM Polynomial Train",
+    "SVM Polynomial Test"
+  ),
+  `Cost` = c(
+    "0.01",
+    "0.01",
+    "1",
+    "1",
+    "0.01",
+    "0.01",
+    "1",
+    "1",
+    "0.01",
+    "0.01",
+    "10",
+    "10"
+  ),
+  `Accuracy` = c(
+    "0.834",
+    "0.815",
+    "0.85",
+    "0.815",
+    "0.623",
+    "0.574",
+    "0.853",
+    "0.819",
+    "0.643",
+    "0.596",
+    "0.869",
+    "0.793"
+  ),
+  `95% CI` = c(
+    "0.806 - 0.859",
+    "0.763 - 0.859",
+    "0.823 - 0.874",
+    "0.763 - 0.859",
+    "0.588 - 0.656",
+    "0.513 - 0.634",
+    "0.826 - 0.876",
+    "0.767 - 0.863",
+    "0.608 - 0.676",
+    "0.535 - 0.655",
+    "0.843 - 0.891",
+    "0.739 - 0.839"
+  ),
+  `No Information` = c(
+    "0.623",
+    "0.574",
+    "0.623",
+    "0.574",
+    "0.623",
+    "0.574",
+    "0.623",
+    "0.574",
+    "0.623",
+    "0.574",
+    "0.623",
+    "0.574"
+  ),
+  `P-Value [Acc > NIR]` = c(
+    "< 2e-16",
+    "< 2e-16",
+    "< 2e-16",
+    "< 2e-16",
+    "0.516",
+    "0.526",
+    "< 2.2e-16",
+    "< 2e-16",
+    "0.129",
+    "0.250",
+    "< 2e-16",
+    "3.05e-14"
+  )
+) %>%
+  kable() %>%
+  kable_styling(
+    bootstrap_options = c("striped", "hover", "condensed", "responsive"),
+    full_width = TRUE
+  ) %>%
+  row_spec(row = 7:8, bold = TRUE)
+```

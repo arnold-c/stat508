@@ -1,0 +1,559 @@
+---
+title: "Data Analysis Assignment W12"
+author: "Callum Arnold"
+output:
+    html_notebook:
+        code_folding: hide
+        toc: yes
+        toc_float: yes
+---
+
+# Report
+## Introduction
+
+This week’s assignment was to evaluate the performance of non-linear regression methods to explore the relationships between variables relating to the personal history of male workers in the Mid-Atlantic region of the US and their wages. To compare the methods ability to describe relationships in the data, the data was split into training and testing datasets using a 75:25 ratio, and the RMSE was calculated for each non-linear method used. ANOVA and cross-validation were used in feature selection and to tune parameters. Polynomial regression and smoothing splines were used for continuous variables with linear methods utilized for categorical variables, and general additive models were also applied to the data. All methods produced similar results in terms of RMSE, although the cubic polynomial model including all variables produced the lowest RMSE in the test data, and least variance from the training data results.
+
+## Data
+
+The `Wage` data from ISLR is a dataset that contains personal information relating to 3000 male workers in the Mid-Atlantic. The information recorded are seen below.
+
+```{r}
+tibble(
+  Variable = names(Wage),
+  Description = c(
+    "Year that wage information was recorded",
+    "Age of worker",
+    "A factor with levels 1. Never Married 2. Married 3. Widowed 4. Divorced and 5. Separated indicating marital status",
+    "A factor with levels 1. White 2. Black 3. Asian and 4. Other indicating race",
+    "A factor with levels 1. < HS Grad 2. HS Grad 3. Some College 4. College Grad and 5. Advanced Degree indicating education level",
+    "Region of the country (mid-atlantic only)",
+    "A factor with levels 1. Industrial and 2. Information indicating type of job",
+    "A factor with levels 1. <=Good and 2. >=Very Good indicating health level of worker",
+    "A factor with levels 1. Yes and 2. No indicating whether worker has health insurance",
+    "Log of workers wage",
+    "Workers raw wage"
+  )
+) %>%
+    kable() %>%
+    kable_styling(
+        bootstrap_options = c("striped", "hover", "condensed", "responsive"), 
+        full_width = F)
+```
+
+
+## Methods
+
+Exploratory data analysis was first conducted to identify potential missing values, non-normality in the predictor and response variables, and correlations between the predictors and the response variable (`wage`). As no individuals were recorded from a region outside of the Mid-Atlantic, the `region` variable was dropped from the dataset. After necessary transformations were made to the data,  training and testing datasets were created using a 75%:25% split, using the response variable as the strata to split along, minimizing the chance of unequal groupings of `wage` between the training and testing sets.
+
+The following non-linear methods were applied to the continuous variables within the training data: polynomial regression, GAMs with smoothing splines, and GAMs with local regression. Starting with polynomial regression, cubic functions were fitted implementing combinations of the predictor variables, and ANOVA utilized to determine the improvement to model fit with subsequent additions to the model. Then cross-validation using RMSE was used to confirm the optimal degree of the polynomial regression. The same techniques were used to evaluate the model fit among the GAMs, with cross-validation used to optimize the degrees of freedom in smoothing splines, and the span in local regression.
+
+## Results
+
+From the EDA, non-normality could be observed in the `wage` variable, however, this was largely resolved through log transformation (see figures below).
+
+```{r}
+ggplot(Wage) +
+    geom_density(aes(x = wage), fill = "pink") +
+    geom_vline(xintercept = mean(wage), col = "dodgerblue", size = 1) +
+    geom_vline(xintercept = median(wage), col = "orangered4", size = 1) +
+    annotate("text", label = "mean", x = mean(wage) + 10, y = 0.004) +
+    annotate("text", label = "median", x = median(wage) - 10, y = 0.004) + 
+    ggtitle("Density plot of wage")
+```
+
+```{r}
+ggplot(Wage) +
+    geom_density(aes(x = logwage), fill = "cornsilk") +
+    geom_vline(xintercept = mean(logwage), col = "dodgerblue", size = 1) +
+    geom_vline(xintercept = median(logwage), col = "orangered4", size = 1) +
+    annotate("text", label = "mean", x = mean(logwage) + 0.1, y = 0.004) +
+    annotate("text", label = "median", x = median(logwage) - 0.1, y = 0.004) + 
+    ggtitle("Density plot of logwage")
+```
+
+Plotting combinations of the predictors variables against the response (`logwage`), a number of general observations could be made: generally, older men earned more than younger men; married men typically earned more money than unmarried men; Asian men typically earned more money than men of other races; there was a strong positive trend of increased wage with increased educational levels; men working in information job types earned more than industrial job types; men in very good or better health earned more money, and men without health insurance earned more money. These can be seen in the figures below.
+
+```{r}
+ggplot(Wage, aes(x = age, y = logwage)) +
+    geom_point() +
+    geom_smooth(method = "lm", formula = "y ~ poly(x, 3)") +
+    ggtitle(label = "Log Wage vs Age", subtitle = "Cubic polynomial fit")
+    
+for (i in 3:9){
+    
+        p <- ggplot(Wage) +
+        geom_boxplot(aes(x = Wage[, i], y = logwage, fill = Wage[, i])) +
+            ggtitle(label = paste0("Log Wage vs ", names(Wage[i]))) +
+        xlab(label = names(Wage)[i])
+    
+        print(p)
+}
+```
+
+After EDA, non-linear methods were fitted to the data and evaluated using ANOVA to test model fit after introducing additional predictors, and cross-validation to optimize each method. The results of these fits and optimizations on the RMSE within both training and testing datasets can be seen in the table below. The best fitting model on the test data proved to be the cubic polynomial utilizing all of the predictor variables. As age was the only continuous variable, the rest of the predictors were input directly into the `lm` function, which encodes the factors as dummy variables in the model fitting process. Whilst GAM with local regression provided marginally lower RMSE in the training data with a `span = 0.2`, it did not produce a smooth function in the modelling of `logwage` vs `age` resulting in a higher test RMSE. Setting `span = 0.5` remedied this issue, but both training and test RMSE was higher than observed in the cubic model. In the final model, the same trends and correlations between predictors and response variables observed in the EDA were seen to be significant in the final combined model summary, with the additional identification of year as being a significant predictor (slight increase in `logwage` over time), and that Asian men did not earn significantly more than men of other races, but Black men did earn less (slight statistical significance where p = 0.053).
+
+```{r}
+tibble(
+    Method = c(
+        "Cubic",
+        "Cubic",
+        "Cubic",
+        "Cubic",
+        "Step",
+        "Step",
+        "GAM - Smoothing (df = 4)",
+        "GAM - Smoothing (df = 4)",
+        "GAM - Local (span = 0.5)",
+        "GAM - Local (span = 0.5)"
+    ),
+    `Variables included` = c(
+        "Age",
+        "Age",
+        "All",
+        "All",
+        "Year",
+        "Year",
+        "All",
+        "All",
+        "All",
+        "All"
+    ),
+    Data = c(
+        "Training",
+        "Test",
+        "Training",
+        "Test",
+        "Training",
+        "Test",
+        "Training",
+        "Test",
+        "Training",
+        "Test"
+    ),
+    RMSE = c(
+        "0.3283",
+        "0.3395",
+        "0.2728",
+        "0.2797",
+        "0.3479",
+        "0.3578",
+        "0.2727",
+        "0.2798",
+        "0.2724",
+        "0.2801"
+    )
+) %>%
+    kable() %>%
+    kable_styling(
+        bootstrap_options = c("striped", "hover", "condensed", "responsive"), 
+        full_width = F) %>%
+    row_spec(row = 3:4, bold = TRUE)
+```
+
+## Conclusion
+
+In conclusion, examining the `Wages` dataset provided the opportunity to apply non-linear methods to ascertain relationships between personal information responses and the wage earned among males working in the Mid-Atlantic. All methods tested provided similar results when assessed on training and test datasets using RMSE, but a cubic polynomial function resulted in the smallest descrepancy between training and test results, i.e. lowest variance. In the final model, all variables were included as they improved model fit, as determined by ANOVA, and wage was found to be positively associated with: age, married men (but did not affect men of other marital status), informational type jobs, and men in good health and with health insurance, with wages increasing over time, and Black men earning slightly less than men of other races. 
+
+
+# Code 
+## Set Up
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE, fig.width = 14)
+```
+
+```{r}
+library(ISLR)
+library(tidyverse)
+library(splines)
+library(gam)
+library(akima)
+library(kableExtra)
+library(hrbrthemes)
+library(janitor)
+library(rsample)
+library(corrplot)
+library(caret)
+library(caretEnsemble)
+library(PerformanceAnalytics)
+
+RNGkind(sample.kind = "Rounding")
+set.seed(1)
+
+theme_set(theme_ipsum())
+```
+
+## EDA
+
+```{r}
+data(Wage)
+
+dim(Wage)
+class(Wage)
+```
+
+```{r}
+names(Wage)
+
+glimpse(Wage)
+summary(Wage)
+```
+
+```{r}
+anyNA(Wage)
+```
+
+```{r}
+ggplot(Wage) +
+    geom_density(aes(x = wage), fill = "pink") +
+    geom_vline(xintercept = mean(wage), col = "dodgerblue", size = 1) +
+    geom_vline(xintercept = median(wage), col = "orangered4", size = 1) +
+    annotate("text", label = "mean", x = mean(wage) + 10, y = 0.004) +
+    annotate("text", label = "median", x = median(wage) - 10, y = 0.004) + 
+    ggtitle("Density plot of wage")
+```
+
+```{r}
+ggplot(Wage) +
+    geom_density(aes(x = logwage), fill = "cornsilk") +
+    geom_vline(xintercept = mean(logwage), col = "dodgerblue", size = 1) +
+    geom_vline(xintercept = median(logwage), col = "orangered4", size = 1) +
+    annotate("text", label = "mean", x = mean(logwage) + 0.1, y = 0.004) +
+    annotate("text", label = "median", x = median(logwage) - 0.1, y = 0.004) + 
+    ggtitle("Density plot of logwage")
+```
+
+```{r}
+corrplot(cor(Wage[, -c(3:9)]), method = "square")
+```
+
+```{r}
+chart.Correlation(Wage[, -c(3:9)])
+```
+
+```{r}
+for (i in 1:5){
+    p <- ggplot(Wage) +
+        geom_histogram(aes(x = Wage[, i]), stat = "count") +
+        xlab(label = names(Wage)[i])
+    
+    print(p)
+}
+```
+
+```{r}
+tabyl(Wage$maritl)
+tabyl(Wage$race)
+tabyl(Wage$education)
+tabyl(Wage$region)
+tabyl(Wage$jobclass)
+tabyl(Wage$health)
+tabyl(Wage$health_ins)
+```
+
+```{r}
+clean_wage <- Wage %>%
+    select(everything(), -c(region))
+```
+
+```{r}
+ggplot(Wage) +
+    geom_boxplot(aes(x = factor(year), y = logwage, fill = year))
+
+ggplot(Wage) +
+    geom_point(aes(x = age, y = logwage))
+    
+for (i in 3:9){
+    
+        p <- ggplot(Wage) +
+        geom_boxplot(aes(x = Wage[, i], y = logwage, fill = Wage[, i])) +
+        xlab(label = names(Wage)[i])
+    
+        print(p)
+}
+```
+
+General increasing trend in wage by `education`, `jobclass`, and `health`. General decreasing trend by `health_ins`
+
+## Data Prep
+
+```{r}
+set.seed(1)
+
+wage_split <- initial_split(clean_wage, strata = wage, prop = 0.75)
+train_data <- training(wage_split)
+test_data <- testing(wage_split)
+```
+
+## Polynomial Regression
+
+```{r}
+poly_1 <- lm(logwage ~ poly(age, 3), data = train_data)
+poly_2 <- lm(logwage ~ poly(age, 4), data = train_data)
+poly_3 <- lm(logwage ~ poly(age, 3) + education, data = train_data)
+poly_4 <- lm(logwage ~ poly(age, 4) + education, data = train_data)
+```
+
+```{r}
+anova(poly_1, poly_2, poly_3, poly_4)
+```
+
+```{r}
+anova(poly_2, poly_4)
+```
+
+```{r}
+ggplot(train_data, aes(x = age, y = logwage)) +
+    geom_point() +
+    geom_smooth(method = "lm", formula = "y ~ poly(x, 3)") +
+    geom_smooth(method = "lm", formula = "y ~ poly(x, 4)", color = "red")
+```
+
+
+Doesn't seem to be major improvement past cubic polynomial once other predictors are added.
+
+```{r}
+poly_3 <- lm(logwage ~ poly(age, 3) + education, data = train_data)
+poly_5 <- lm(logwage ~ poly(age, 3) + education + jobclass, data = train_data)
+poly_6 <- lm(logwage ~ poly(age, 3) + education + jobclass + health, data = train_data)
+poly_7 <- lm(logwage ~ poly(age, 3) + education + jobclass + health + health_ins, data = train_data)
+poly_8 <- lm(logwage ~ poly(age, 3) + education + jobclass + health + health_ins + maritl, data = train_data)
+poly_9 <- lm(logwage ~ poly(age, 3) + education + jobclass + health + health_ins + maritl + year, data = train_data)
+poly_10 <- lm(logwage ~ poly(age, 3) + education + jobclass + health + health_ins + maritl + year + race, data = train_data)
+```
+
+```{r}
+anova(poly_3, poly_5, poly_6, poly_7, poly_8, poly_9, poly_10)
+```
+
+```{r}
+poly_1 <- lm(logwage ~ poly(age, 3), data = train_data)
+poly_3 <- lm(logwage ~ poly(age, 3) + education, data = train_data)
+poly_8 <- lm(logwage ~ poly(age, 3) + jobclass, data = train_data)
+poly_9 <- lm(logwage ~ poly(age, 3) + health, data = train_data)
+poly_10 <- lm(logwage ~ poly(age, 3) + health_ins, data = train_data)
+poly_11 <- lm(logwage ~ poly(age, 3) + maritl, data = train_data)
+poly_12 <- lm(logwage ~ poly(age, 3) + year, data = train_data)
+poly_13 <- lm(logwage ~ poly(age, 3) + race, data = train_data)
+```
+
+```{r}
+anova(poly_1, poly_3) 
+anova(poly_1, poly_8)
+anova(poly_1, poly_9)
+anova(poly_1, poly_10)
+anova(poly_1, poly_11)
+anova(poly_1, poly_12)
+anova(poly_1, poly_13)
+```
+
+Adding each variable individually to the cubic polynomial of age improved model fit, and adding all variables successively improved fit over the previous - include all terms in final model
+
+```{r}
+poly_cv_error <- rep(0, 10)
+for (i in 1:10) {
+    poly <- lm(logwage ~ poly(age, i) + education + race + jobclass + health + health_ins + maritl + year, data = train_data)
+    poly_train_preds <- predict(poly, newdata = train_data)
+    poly_cv_error[i] <- sqrt(mean((train_data$logwage - poly_train_preds)^2))
+}
+
+plot(1:10, poly_cv_error, pch = 19, type = "b", main = "CV of Polynomial RMSE in Training Data", xlab = "Degrees of polynomial", ylab = "RMSE")
+grid()
+```
+
+```{r}
+poly_final <- lm(logwage ~ poly(age, 3) + education + race + jobclass + health + health_ins + maritl + year, data = train_data)
+
+poly_1_train_preds <- predict(poly_1, newdata = train_data)
+poly_1_train_rmse <- sqrt(mean((train_data$logwage - poly_1_train_preds)^2))
+
+poly_final_train_preds <- predict(poly_final, newdata = train_data)
+poly_final_train_rmse <- sqrt(mean((train_data$logwage - poly_final_train_preds)^2))
+
+poly_1_train_rmse
+poly_final_train_rmse
+```
+
+```{r}
+poly_1_test_preds <- predict(poly_1, newdata = test_data)
+poly_1_test_rmse <- sqrt(mean((test_data$logwage - poly_1_test_preds)^2))
+
+poly_final_test_preds <- predict(poly_final, newdata = test_data)
+poly_test_rmse <- sqrt(mean((test_data$logwage - poly_final_test_preds)^2))
+
+poly_1_test_rmse
+poly_test_rmse
+```
+
+Confirms that adding extra variables improved model fit over just cubic age polynomial. Very similar values for training and test data indicates low variance.
+
+```{r}
+summary(poly_final)
+```
+
+
+## Step Functions
+
+Only year makes sense to use for a step function as only numerical category (aside from age), and has natural cut points.
+```{r}
+step_year <- lm(logwage ~ cut(year, breaks = 2002:2009), data = train_data)
+
+year_step_fit <- tibble(
+  year = seq(2003, 2009, 0.1),
+  logwage = predict(step_year, tibble(year = seq(2003, 2009, 0.1)))
+)
+
+ggplot(train_data, aes(x = year, y = logwage)) +
+  geom_point() +
+  geom_line(
+    data = year_step_fit,
+    aes(x = year, y = logwage)
+  ) +
+  scale_x_continuous(breaks = 2003:2009, minor_breaks = NULL)
+```
+
+```{r}
+step_year_train_preds <- predict(step_year, newdata = train_data)
+step_year_train_rmse <- sqrt(mean((train_data$logwage - step_year_train_preds)^2))
+
+step_year_test_preds <- predict(step_year, newdata = test_data)
+step_year_test_rmse <- sqrt(mean((test_data$logwage - step_year_test_preds)^2))
+
+step_year_train_rmse
+step_year_test_rmse
+```
+
+Step function of year is a worse predictor than the polynomial fits
+
+## GAMs
+### Smoothing Splines
+
+```{r}
+gam_1 <- gam(logwage ~ s(age, 4), data = train_data)
+gam_2 <- gam(logwage ~ s(age, 4) + education, data = train_data)
+gam_3 <- gam(logwage ~ s(age, 4) + jobclass, data = train_data)
+gam_4 <- gam(logwage ~ s(age, 4) + health, data = train_data)
+gam_5 <- gam(logwage ~ s(age, 4) + health_ins, data = train_data)
+gam_6 <- gam(logwage ~ s(age, 4) + maritl, data = train_data)
+gam_7 <- gam(logwage ~ s(age, 4) + year, data = train_data)
+gam_8 <- gam(logwage ~ s(age, 4) + race, data = train_data)
+```
+
+```{r}
+anova(gam_1, gam_2)
+anova(gam_1, gam_3)
+anova(gam_1, gam_4)
+anova(gam_1, gam_5)
+anova(gam_1, gam_6)
+anova(gam_1, gam_7)
+anova(gam_1, gam_8)
+```
+
+```{r}
+gam_1 <- gam(logwage ~ s(age, 4), data = train_data)
+gam_2 <- gam(logwage ~ s(age, 4) + education, data = train_data)
+gam_3 <- gam(logwage ~ s(age, 4) + education + jobclass, data = train_data)
+gam_4 <- gam(logwage ~ s(age, 4) + education + jobclass + health, data = train_data)
+gam_5 <- gam(logwage ~ s(age, 4) + education + jobclass + health + health_ins, data = train_data)
+gam_6 <- gam(logwage ~ s(age, 4) + education + jobclass + health + health_ins + maritl, data = train_data)
+gam_7 <- gam(logwage ~ s(age, 4) + education + jobclass + health + health_ins + maritl + year, data = train_data)
+gam_8 <- gam(logwage ~ s(age, 4) + education + jobclass + health + health_ins + maritl + year + race, data = train_data)
+
+anova(gam_1, gam_2, gam_3, gam_4, gam_5, gam_6, gam_7, gam_8)
+```
+Adding each variable individually to the cubic polynomial of age improved model fit, and adding all variables successively improved fit over the previous - include all terms in final model
+
+```{r}
+gam_cv_error <- rep(0, 10)
+for (i in 1:10) {
+    gam <- gam(logwage ~ s(age, i) + education + jobclass + health + health_ins + maritl + year + race, data = train_data)
+    gam_train_preds <- predict(gam, newdata = train_data)
+    gam_cv_error[i] <- sqrt(mean((train_data$logwage - gam_train_preds)^2))
+}
+
+plot(1:10, gam_cv_error, pch = 19, type = "b", main = "CV of GAM RMSE in Training Data", xlab = "Degrees of freedom", ylab = "RMSE")
+grid()
+```
+
+
+```{r}
+gam_final <- gam(logwage ~ s(age, 4) + education + jobclass + health + health_ins + maritl + year + race, data = train_data)
+
+gam_final_train_preds <- predict(gam_final, newdata = train_data)
+gam_final_train_rmse <- sqrt(mean((train_data$logwage - gam_final_train_preds)^2))
+
+gam_final_train_rmse
+```
+
+```{r}
+gam_final_test_preds <- predict(gam_final, newdata = test_data)
+gam_final_test_rmse <- sqrt(mean((test_data$logwage - gam_final_test_preds)^2))
+
+gam_final_test_rmse
+```
+
+Very similar performance using smoothing splines in GAM to polynomial. Elbow in CV indicates 4 df best comprimise.
+
+```{r}
+par(mfrow = c(2, 2))
+plot(gam_final, se = T, col = "blue")
+```
+
+### Local Regression
+
+```{r}
+gam_lo_cv_error <- rep(0, 10)
+for (i in 1:10) {
+    gam_lo <- gam(logwage ~ lo(age, span = i/10) + education + jobclass + health + health_ins + maritl + year + race, data = train_data)
+    gam_lo_train_preds <- predict(gam_lo, newdata = train_data)
+    gam_lo_cv_error[i] <- sqrt(mean((train_data$logwage - gam_lo_train_preds)^2))
+}
+
+plot(1:10/10, gam_lo_cv_error, pch = 19, type = "b", main = "CV of GAM Local Regression RMSE in Training Data", xlab = "Span", ylab = "RMSE")
+grid()
+```
+
+```{r}
+gam_lo_span_final <- gam(logwage ~ lo(age, span = 0.2) + education + jobclass + health + health_ins + maritl + year + race, data = train_data)
+
+gam_lo_span_final_train_preds <- predict(gam_lo_span_final, newdata = train_data)
+gam_lo_span_final_train_rmse <- sqrt(mean((train_data$logwage - gam_lo_span_final_train_preds)^2))
+
+gam_lo_span_final_train_rmse
+```
+
+```{r}
+gam_lo_span_final_test_preds <- predict(gam_lo_span_final, newdata = test_data)
+gam_lo_span_final_test_rmse <- sqrt(mean((test_data$logwage - gam_lo_span_final_test_preds)^2))
+
+gam_lo_span_final_test_rmse
+```
+
+```{r}
+par(mfrow = c(2, 2))
+plot(gam_lo_span_final, se = T, col = "red")
+```
+
+
+```{r}
+gam_lo_final <- gam(logwage ~ lo(age, span = 0.5) + education + jobclass + health + health_ins + maritl + year + race, data = train_data)
+
+gam_lo_final_train_preds <- predict(gam_lo_final, newdata = train_data)
+gam_lo_final_train_rmse <- sqrt(mean((train_data$logwage - gam_lo_final_train_preds)^2))
+
+gam_lo_final_train_rmse
+```
+
+```{r}
+gam_lo_final_test_preds <- predict(gam_lo_final, newdata = test_data)
+gam_lo_final_test_rmse <- sqrt(mean((test_data$logwage - gam_lo_final_test_preds)^2))
+
+gam_lo_final_test_rmse
+```
+
+```{r}
+par(mfrow = c(2, 2))
+plot(gam_lo_final, se = T, col = "blue")
+```
+
+Span of 0.5 provides balance of RMSE and smoothness (sort of "elbow" after)

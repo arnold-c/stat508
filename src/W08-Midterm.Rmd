@@ -1,0 +1,160 @@
+---
+title: "STAT508 Individual Midterm"
+author: "Callum Arnold"
+output:
+    html_notebook:
+        code_folding: hide
+        toc: yes
+        toc_float: yes
+---
+
+# Set Up
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+```
+
+```{r}
+library(tidyverse)
+library(ggforce)
+library(here)
+library(caret)
+library(MASS)
+library(class)
+library(kableExtra)
+library(hrbrthemes)
+library(janitor)
+library(broom)
+library(rsample)
+library(corrplot)
+library(lares)
+
+RNGkind(sample.kind = "Rounding")
+set.seed(1)
+
+theme_set(theme_ipsum())
+```
+
+```{r}
+wiki <- read.csv(
+  here("data", "wiki4HE.csv"),
+  header = TRUE,
+  sep = ";",
+  na.strings = "?"
+)
+```
+
+# Data Cleaning and Exploration
+
+```{r}
+wiki <- wiki %>%
+    clean_names()
+
+names(wiki)
+
+wiki <- wiki %>%
+    rename(phd = ph_d)
+```
+
+```{r}
+summary(wiki)
+```
+
+```{r}
+hist_plts <- function(data, var, ncol, nrow, pages) {
+  for (i in 1:pages) {
+    plot <- data %>%
+      ggplot(
+        aes(
+          x = {{ var }}
+        )
+      ) +
+      geom_histogram(binwidth = 1) +
+      labs(
+        caption = paste0("Page ", i, " of ", pages)
+      ) +
+      scale_x_continuous() +
+      scale_fill_ipsum() +
+      facet_wrap_paginate(
+        ~Variable,
+        scales = "free",
+        nrow = {{ ncol }},
+        ncol = {{ nrow }},
+        page = i) +
+      theme_ipsum_rc()
+
+    print(plot)
+  }
+}
+```
+
+```{r, fig.width=14}
+wiki %>%
+    pivot_longer(
+        cols = everything(),
+        names_to = "Variable",
+        values_to = "Score"
+        ) %>%
+    hist_plts(var = Score, ncol = 3, nrow = 3, pages = 6)
+```
+
+```{r}
+wiki_trans <- wiki %>%
+    mutate(yearsexp = log1p(yearsexp))
+
+ggplot(wiki_trans) +
+    geom_histogram(aes(x = yearsexp), binwidth = 0.5)
+```
+
+
+```{r, fig.width=10}
+corr_matrix <- cor(wiki_trans[, -c(6, 7, 8)], use = "complete.obs")
+corrplot(corr_matrix, order = "hclust", type = "upper")
+```
+
+```{r}
+corr_cross(df = wiki_trans, top = 20)
+```
+
+
+# Part 1
+## PCA
+
+```{r}
+wiki_pca <- wiki_trans %>%
+  dplyr::select(!c(use1:use5, age, phd, university)) %>%
+  na.omit() %>%
+  prcomp(center=TRUE, scale = TRUE)
+
+summary(wiki_pca)
+```
+```{r}
+variance <- (wiki_pca$sdev)^2
+
+pve <- variance / sum(variance)
+```
+
+```{r}
+par(mfrow = c(1, 2))
+
+barplot(pve, xlab = "PC", ylab = "Proportion of variance explained", names.arg = 1:length(pve), las = 1, col = "gray")
+barplot(cumsum(pve), xlab = "Principal Component", ylab = " Cumulative Proportion of Variance Explained", ylim = c(0, 1))
+```
+
+Elbow around PC6.
+
+# Part 2
+## Data Transformation
+
+Transform Likert responses "1-3" as "0" (No), and "4-5" as "1" (Yes). A response of "3" is transformed to "No" as each of the survey items asks a positive actions that indicates an improvement over the status quo, therefore can be viewed as the alternative hypothesis, and an indifferent response is like failing to reject the null.
+
+```{r}
+
+```
+
+
+## Logistic Regression
+## LDA
+## QDA
+## kNN
+## Model Comparison

@@ -1,0 +1,305 @@
+---
+title: "Data Analysis Assignment W11"
+author: "Callum Arnold"
+output:
+    html_notebook:
+        code_folding: hide
+        toc: yes
+        toc_float: yes
+---
+
+# Report
+## Introduction
+
+This week’s assignment was to evaluate the performance of tree-based classification methods, and the effects of pruning, to explore which variables act as predictors of which brand of orange juice was purchased in the `OJ` dataset (`Purchase` as the response variable), and to explore the output of the methods that were part of the `tree` package in `R`. To compare the methods’ predictive power, the data was split into training and test data sets, and accuracy and error rates were calculated for both data sets. In addition, the decision trees were plotted, and cross-validation was used to determine the optimal tree size prior to pruning for the final model. In both the training and the test data, the decision tree performed well, producing similar accuracy rates to the support vector machine methods previously used to examine this dataset (~ 83% on the test data in the pruned tree vs 82% using SVM with a radial kernel, which was previously the most performant of the SVM methods). There was a slight improvement in accuracy observed in the test data over the training data, indicating low variance. 
+
+## Data 
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE, fig.width = 14)
+```
+
+```{r}
+library(ISLR)
+library(tidyverse)
+library(e1071)
+library(tree)
+library(rpart)
+library(rpart.plot)
+library(caret)
+library(here)
+library(kableExtra)
+library(hrbrthemes)
+library(janitor)
+library(rsample)
+library(factoextra)
+
+RNGkind(sample.kind = "Rounding")
+set.seed(1)
+
+theme_set(theme_ipsum())
+```
+
+```{r}
+data("OJ")
+glimpse(OJ)
+```
+
+The `OJ` data from ISLR is a dataset that contains over 1000 purchase records of either "Citrus Hill" or "Minute Maid" brands of orange juice, and 17 variables that are possible predictors of the purchase brand. The predictor variable descriptions are listed below.
+
+```{r}
+tibble(
+  Variable = names(OJ),
+  Description = c(
+    "A factor with levels CH and MM indicating whether the customer purchased Citrus Hill or Minute Maid Orange Juice",
+    "Week of purchase",
+    "Store ID", 
+    "Price charged for CH",
+    "Price charged for MM",
+    "Discount offered for CH",
+    "Discount offered for MM",
+    "Indicator of special on CH",
+    "Indicator of special on MM",
+    "Customer brand loyalty for CH",
+    "Sale price for MM",
+    "Sale price for CH",
+    "Sale price of MM less sale price of CH",
+    "A factor with levels No and Yes indicating whether the sale is at Store 7",
+    "Percentage discount for MM",
+    "Percentage discount for CH",
+    "List price of MM less list price of CH",
+    "Which of 5 possible stores the sale occured at"
+  )
+) %>%
+    kable() %>%
+    kable_styling(
+        bootstrap_options = c("striped", "hover", "condensed", "responsive"), 
+        full_width = F)
+```
+
+## Methods and Questions
+
+To guide exploration of the dataset, there were a series of 11 questions/prompts. These are listed below.
+
+> 1. Create a training set containing a random sample of 800 observations, and a test set containing the remaining observations.
+2. Fit a tree to the training data, with `Purchase` as the response and the other variables as predictors. Use the `summary()` function to produce summary statistics about the tree, and describe the results obtained. What is the training error rate? How many terminal nodes does the tree have?
+3. Type in the name of the tree object in order to get a detailed text output. Pick one of the terminal nodes, and interpret the information displayed.
+4. Create a plot of the tree, and interpret the results.
+5. Predict the response on the test data, and produce a confusion matrix comparing the test labels to the predicted test labels. What is the test error rate?
+6. Apply the `cv.tree()` function to the training set in order to determine the optimal tree size.
+7. Produce a plot with tree size on the x-axis and cross-validated classification error rate on the y-axis.
+8. Which tree size corresponds to the lowest cross-validated classification error rate?
+9. Produce a pruned tree corresponding to the optimal tree size obtained using cross-validation. If cross-validation does not lead to selection of a pruned tree, then create a pruned tree with five terminal nodes.
+10. Compare the training error rates between the pruned and unpruned trees. Which is higher?
+11. Compare the test error rates between the pruned and unpruned trees. Which is higher?
+
+To explore the data and answer these questions, the following methods were used. To start with, 800 of the observations were randomly selected to form the training dataset, with the remaining 270 making up the testing dataset (a `r round(800/1070, 2)*100`% : `r round(270/1070, 2)*100`% split). An unpruned tree was then fit to the training data, before it was examined graphically and using `R` output to determine the most important variables in the prediction of `Purchase`. Cross-validation was used to determine the tree size that minimized the error rate in the training dataset, using the `cv.tree(tree, FUN = prune.misclass)` function, and confusion matrices were constructed for both pruned and unpruned trees on both the training and testing datasets as a means of evaluating classification and predictive performance.
+
+## Results
+
+To best address the questions and prompts, each has been provided with its own section to ensure that it is clear to follow which code and responses pertain to which prompts.
+
+### Q1
+
+> Create a training set containing a random sample of 800 observations, and a test set containing the remaining observations.
+
+```{r}
+set.seed(1)
+
+oj_split <- initial_split(OJ, prop = 800 / nrow(OJ))
+train_data <- training(oj_split)
+test_data <- testing(oj_split)
+```
+
+### Q2
+
+> Fit a tree to the training data, with `Purchase` as the response and the other variables as predictors. Use the `summary()` function to produce summary statistics about the tree, and describe the results obtained. What is the training error rate? How many terminal nodes does the tree have?
+
+Although there are 17 predictor variables in the datasets, only 3 are used in the construction of the decision tree on the training data: `LoyalCH`, `PriceDiff`, and `SalePriceMM`. There are 8 terminal nodes (AKA the number of "leaves"). In the training data, there was an 83.9% accuracy (equivalent to 16.1% error rate). With a `No Information Rate = 0.6225` the accuracy can be deemed to be statistically significant (p << 0.01) i.e. there is strong evidence to reject the null hypothesis that the prediction accuracy is purely due to chance. With a sensitivity > 90% and a specificity of approximately 73% the tree performs well at accurately predicting true "CH" purchases, and moderately worse at accurately predicting true "MM" purchases (as "CH" is chosen to be the "positive" class).
+
+```{r}
+train_tree <- tree(Purchase ~ ., data = train_data)
+
+summary(train_tree)
+```
+
+```{r}
+train_tree_pred <- predict(train_tree, train_data, type = "class")
+
+confusionMatrix(train_tree_pred, train_data$Purchase)
+```
+
+### Q3
+
+> Type in the name of the tree object in order to get a detailed text output. Pick one of the terminal nodes, and interpret the information displayed.
+
+Using node 8 as an example of a terminal node (`8) LoyalCH < 0.0616725 67   17.99 MM ( 0.02985 0.97015 ) *`), the output lists the predictor variable involved in the split, in this case `LoyalCH` and the decision value, including which side of the value the node lies on (here, < 0.0617). The next number "67" indicates the number of values in the node. "17.99" indicates the deviance in this node The next piece of information shown is the prediction for this group: "MM". In the parentheses, "(yprob)" refers to the proportion of all observations that are in this node are "CH" vs "MM" i.e. 2.985% of of all observations in this node have a response value of "CH", and 97.015% of all observations in the node have a response value of "MM", leading to the prediction "MM". The asterix indicates that it is a terminal node.
+
+What's interesting is that node 9 is another terminal node connected to the decision "LoyalCH < 0.0617", and also predicts "MM". Although they both predict the same outcome, the split likely occurs to increase the purity of the child nodes. Although the relative proportion of "CH" in an "MM" prediction increases to 20.4%  in node 9 (and is therefore less pure than node 8), the split will occur as this configuration will reduce the total impurity over a single terminal node comprising node 8 + node 9.
+
+>> *N.B.* the numerical calculations below are purely to confirm the values observed in the confusion matrix using the values of `n` and `(yprob)` with the class prediction in the terminal nodes.
+
+```{r}
+train_tree
+```
+
+```{r}
+# MM correct predictions
+67  * 0.97015 + 93 * 0.79570 + 73 * 0.78082 + 34 * 0.70588
+
+## MM incorrect predictions
+67  * (1-0.97015) + 93 * (1-0.79570) + 73 * (1-0.78082) + 34 * (1-0.70588)
+
+# CH correct predictions
+104 * 0.58654 + 97 * 0.73196 + 66 * 0.95455 + 266 * 0.96241
+
+# CH incorrect predictions
+104 * (1-0.58654) + 97 * (1-0.73196) + 66 * (1-0.95455) + 266 * (1-0.96241)
+
+```
+
+### Q4
+
+> Create a plot of the tree, and interpret the results.
+
+Examining the unpruned tree, the most important indicator of `Purchase` is `LoyalCH` level, specifically if the value is < 0.5036, as this is the first split in the decision tree. The second through fourth splits (up to node 9) are also both related to customer loyalty to Citrus Hill, reaffirming its importance in the tree. Following `LoyalCH`, the next splits are `PriceDiff` (splits five and six), with `SalePriceMM` being the final split, and therefore least important indicator of `Purchase`. 
+
+The majority of "CH" purchases are found when `LoyalCH > 0.5036`, and the majority of "MM" purchases are found when `LoyalCH < 0.5036`, with only one exception to the predictions in each instance: "MM" predicted when `LoyalCH > 0.5036` + `LoyalCH < 0.753545` + `PriceDiff < -0.165`, i.e. customer loyalty to Citrus Hill is moderate and Minute Maid's sale price is at least \$ 0.165 cheaper than Citrus Hill's, and; "CH" is predicted when `LoyalCH < 0.5036` + `LoyalCH > 0.276142` + `PriceDiff > 0.05`, i.e. customer loyalty to Citrus Hill is moderate and Minute Maid's sale price is at least \$ 0.05 more than Citrus Hill's sale price.
+
+```{r}
+plot(train_tree)
+text(train_tree, pretty = 0)
+title(main = "Unpruned Decision Tree for OJ Data")
+```
+
+### Q5
+
+> Predict the response on the test data, and produce a confusion matrix comparing the test labels to the predicted test labels. What is the test error rate?
+
+In the test data, there was 83.0% accuracy (equivalent to 17% error rate). This is only very slightly reduced from the training data accuracy of 83.9%. The sensitivity in the test data is 91.0% (the same as the training data), and the specificity is 72.2% (training specificity = 72.9%), where the "positive" class is "CH". Therefore the tree performs well at accurately predicting true "CH" purchases, and moderately worse at accurately predicting true "MM" purchases.
+
+```{r}
+test_tree_pred <- predict(train_tree, test_data, type = "class")
+
+confusionMatrix(test_tree_pred, test_data$Purchase)
+```
+
+### Q6
+
+> Apply the `cv.tree()` function to the training set in order to determine the optimal tree size.
+
+Based on the `dev` values (which indicate cross-validation error rates, not deviance) produced through the cross-validation and observed in the object printout and a cross-tabulation, it seems that trees of size 6 and 8 terminal nodes have the lowest cross-validation error rates. If so, choosing a tree of size 6 would be preferable as it is more parsimonious and therefore interpretable. We will confirm this results graphically in Q7.
+
+```{r}
+train_cv_tree <- cv.tree(train_tree, FUN = prune.misclass)
+
+train_cv_tree
+```
+
+```{r}
+table(train_cv_tree$size, train_cv_tree$dev)
+```
+
+### Q7
+
+> Produce a plot with tree size on the x-axis and cross-validated classification error rate on the y-axis.
+
+The plots below describe the misclassication and error rates (`dev`) by tree size (`size`) in the training dataset, and are the graphical analog to the numerical outputs above.
+
+```{r}
+plot(train_cv_tree, 
+     main = "Number of Misclassifications by Tree Size for OJ Training Data")
+```
+
+```{r}
+plot(train_cv_tree$size, train_cv_tree$dev, type = "b",
+     main = "Error Rate by Tree Size for OJ Training Data")
+```
+
+### Q8
+
+> Which tree size corresponds to the lowest cross-validated classification error rate?
+
+Based on the plots of the number of misclassifications and the error rate ("dev") vs the tree size ("size"), a tree size of 6 is optimal given it provides the minimum error rate and is more parsimonious than a tree size of 8.
+
+### Q9
+
+> Produce a pruned tree corresponding to the optimal tree size obtained using cross-validation. If cross-validation does not lead to selection of a pruned tree, then create a pruned tree with five terminal nodes.
+
+Cross-validation highlighted that the optimal tree size was size 6 using cross-validation to evaluate the error rates. when using this as an input, the pruned tree that performs best on the training data can be created. Below the structure is visualized. Comparing to the unpruned tree, it can be seen that it is structurally similar, differing only at decision nodes that create terminal nodes with the same predicted class for purity purposes. As such, we should expect identical performance between the pruned and unpruned trees. This will be confirmed using confusion matrices in the next two questions.
+
+```{r}
+train_pruned_tree <- prune.misclass(train_tree, best = 6)
+
+summary(train_pruned_tree)
+```
+
+```{r}
+train_pruned_tree
+```
+
+```{r}
+plot(train_pruned_tree)
+text(train_pruned_tree, pretty = 0)
+title(main = "Pruned Decision Tree for OJ Data (Size = 6)")
+```
+
+### Q10
+
+> Compare the training error rates between the pruned and unpruned trees. Which is higher?
+
+As expected from the visual inspection, the training accuracy rates (and therefore the error rates) are identical between the pruned and unpruned trees because the vast majority of the terminals nodes are identical. The only differences observed do not affect the predictions - the unpruned tree makes two splits that would benefit the purity of the nodes, but do not affect the predictions. These changes occur at node 4 (`LoyalCH < 0.276142`) which predicts "MM", and node 13 (`PriceDiff > -0.165`) which predicts "CH", both of which become terminal nodes in the pruned tree. 
+
+```{r}
+train_pruned_pred <- predict(train_pruned_tree, train_data, type = "class")
+
+confusionMatrix(train_pruned_pred, train_data$Purchase)
+confusionMatrix(train_tree_pred, train_data$Purchase)
+```
+
+### Q11
+
+> Compare the test error rates between the pruned and unpruned trees. Which is higher?
+
+As with the training data, the test accuracy and error rates are identical between the pruned and unpruned tree because the predictions made are identical.
+
+```{r}
+test_pruned_pred <- predict(train_pruned_tree, test_data, type = "class")
+
+confusionMatrix(test_pruned_pred, test_data$Purchase)
+confusionMatrix(test_tree_pred, test_data$Purchase)
+```
+
+### SVM with Radial Kernel
+
+To compare the performance of tree-based methods against other machine learning techniques, a support vector machine with a radial kernel (SVM-R) was fit to the same data, as this had the best test performance in a prior analysis of the `OJ` dataset. In the training data, an accuracy of 85.3% was achieved, and an accuracy of 81.9% was achieved in the test dataset. This illustrates that SVM-R potentially has lower bias but higher variance than the tree-based methods that were used, although the performance is very similar.
+
+```{r}
+svm_rad_tuned <- tune(
+  svm,
+  Purchase ~ .,
+  data = train_data,
+  kernel = "radial",
+  ranges = list(cost = c(0.01, 0.1, 1, 3, 6, 10))
+)
+
+summary(svm_rad_tuned)
+
+svm_rad_bestmod <- svm_rad_tuned$best.model
+
+summary(svm_rad_bestmod)
+```
+
+```{r}
+svm_rad_best_ypred_train <- predict(svm_rad_bestmod, newdata = train_data)
+confusionMatrix(svm_rad_best_ypred_train, reference = train_data$Purchase)
+```
+
+```{r}
+svm_rad_best_ypred_test <- predict(svm_rad_bestmod, newdata = test_data)
+confusionMatrix(svm_rad_best_ypred_test, reference = test_data$Purchase)
+```
+
+## Conclusions
+
+To examine the `OJ` dataset, training and testing subsets were created before exploration using tree-based methods. Decision trees are a popular classification method because they are easily interpretable, and also can produce accurate predictions. This was seen in the exploration of the `OJ` dataset. The decision trees produced identified the 3 most important indicators of the response variable `Purchase` as: `LoyalCH`, `PriceDiff`, and `SalePriceMM`, with importance decreasing in this order. After performing cross-validation on the training dataset, a tree size of 6 was determined to minimize the error rate and maximise simplicity for interpretability, only sacrificing terminal node purity over the unpruned tree. With an accuracy rate of 83.8% in the training data and 83.0% in the test data, the pruned tree demonstrates very low variance, and performs better than the most performant SVM method from prior analysis of the `OJ` datset (SVM-R had an accuracy of 81.9% in test data with greater variance).
